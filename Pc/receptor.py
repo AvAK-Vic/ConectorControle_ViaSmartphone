@@ -1,150 +1,262 @@
+import importlib.util
 import socket
+import json
+import os
 import vgamepad as vg
-import sys
-import keyboard  # para atalho de saída
-import threading
-import queue
-import time
 
-# --- CONFIGURAÇÃO INICIAL ----------------------------------------------------
-PORTA_UDP = 5005
-COMBINACAO_SAIDA = 'ctrl+q'  # combinação de teclado para encerrar o receptor
+# Configurações de rede UDP e do arquivo de calibração.
+# IP_RECEPTOR = '0.0.0.0' indica que o receptor aceitará conexões de qualquer interface de rede.
+# PORTA é a porta UDP usada para receber eventos do Android.
+# ARQUIVO_CONFIG guarda o mapeamento entre IDs de eventos recebidos e comandos lógicos do gamepad.
+IP_RECEPTOR = "0.0.0.0"
+PORTA = 5005
+ARQUIVO_CONFIG = "config_controle.json"
 
-# 1. ESTADO COMPLETO DO CONTROLE ------------------------------------------------
-# guarda valores atuais (analógicos, gatilhos, botões, dpad) recebidos do
-# transmissor no smartphone.
-estado_controle = {
-    "AX": 0.0, "AY": 0.0, "RX": 0.0, "RY": 0.0,
-    "LT": 0.0, "RT": 0.0,
-    "BTN_A": 0, "BTN_B": 0, "BTN_X": 0, "BTN_Y": 0,
-    "RB": 0, "LB": 0,
-    "BTN_SELECT": 0, "BTN_START": 0,
-    "L3": 0, "R3": 0,
-    "DPAD_X": 0, "DPAD_Y": 0
-}
+class ReceptorRequisitos:
+    def __init__(self, pacote="vgamepad", arquivo_config=ARQUIVO_CONFIG, host=IP_RECEPTOR, porta=PORTA):
+        self.pacote = pacote
+        self.arquivo_config = arquivo_config
+        self.host = host
+        self.porta = porta
 
-# 2. MAPEAMENTO PARA CONTROLE VIRTUAL ----------------------------------------
-# dicionário imutável que associa chaves de rede a botões XInput
-mapeamento_botoes = {
-    "BTN_A": vg.XUSB_BUTTON.XUSB_GAMEPAD_A,
-    "BTN_B": vg.XUSB_BUTTON.XUSB_GAMEPAD_B,
-    "BTN_X": vg.XUSB_BUTTON.XUSB_GAMEPAD_X,
-    "BTN_Y": vg.XUSB_BUTTON.XUSB_GAMEPAD_Y,
-    "RB": vg.XUSB_BUTTON.XUSB_GAMEPAD_RIGHT_SHOULDER,
-    "LB": vg.XUSB_BUTTON.XUSB_GAMEPAD_LEFT_SHOULDER,
-    "BTN_SELECT": vg.XUSB_BUTTON.XUSB_GAMEPAD_BACK,
-    "BTN_START": vg.XUSB_BUTTON.XUSB_GAMEPAD_START,
-    "L3": vg.XUSB_BUTTON.XUSB_GAMEPAD_LEFT_THUMB,
-    "R3": vg.XUSB_BUTTON.XUSB_GAMEPAD_RIGHT_THUMB
-}
+    def verificar(self):
+        """Verifica dependências essenciais e reserva a porta UDP antes de iniciar o algoritmo.
 
-# inicializa o gamepad virtual e o socket UDP não bloqueante
-gamepad = vg.VX360Gamepad()
-sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-sock.bind(('0.0.0.0', PORTA_UDP))
-sock.setblocking(False)  # modo não bloqueante para evitar travar o loop
+        Esta verificação é importante para falhar cedo caso o ambiente não esteja corretamente configurado.
+        O pacote `vgamepad` é necessário para criar o gamepad virtual no Windows.
+        A porta UDP deve estar livre para que o receptor receba mensagens do Android.
+        """
+        if importlib.util.find_spec(self.pacote) is None:
+            raise RuntimeError(
+                f"O pacote Python '{self.pacote}' não está instalado. Execute: pip install {self.pacote}"
+            )
 
-# fila thread-safe para mensagens recebidas
-msg_queue = queue.Queue()
+        if not os.path.exists(self.arquivo_config):
+            print(
+                f"Aviso: '{self.arquivo_config}' não foi encontrado. A calibração será executada para criar o arquivo."
+            )
 
-# thread dedicada à leitura da rede para liberar o loop principal e evitar
-# que várias leituras sucessivas causem atrasos no processamento do gamepad
-
-def network_listener(sock, q):
-    """Recebe pacotes UDP e coloca os dados brutos na fila."""
-    while True:
+        probe_socket = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
         try:
-            data, addr = sock.recvfrom(1024)  # pode lançar BlockingIOError
-            q.put(data)
-        except BlockingIOError:
-            # sem dados no momento; dá uma pequena pausa para não girar em CPU 100%
-            time.sleep(0.005)
-            continue
+            probe_socket.bind((self.host, self.porta))
+        except Exception as exc:
+            raise RuntimeError(
+                f"Não foi possível abrir a porta UDP {self.porta} em {self.host}: {exc}"
+            )
+        finally:
+            probe_socket.close()
 
-# dispara a thread de rede em background
-listener = threading.Thread(target=network_listener, args=(sock, msg_queue), daemon=True)
-listener.start()
+requisitos = ReceptorRequisitos().verificar()
 
-print('--- RECEPTOR DE CONTROLE SMARTPHONE ---')
-print(f'🎮 Status: Online na porta {PORTA_UDP}')
-print(f'⌨️  Atalho para encerrar no PC: [{COMBINACAO_SAIDA.upper()}]')
+gamepad = vg.VX360Gamepad()
 
-clock = time.time  # placeholder caso queiramos limitar FPS; não crítico aqui
+MAPA_VIRTUAL = {
+    "A_PULO": vg.XUSB_BUTTON.XUSB_GAMEPAD_A,
+    "B_VOLTAR": vg.XUSB_BUTTON.XUSB_GAMEPAD_B,
+    "X_ACAO": vg.XUSB_BUTTON.XUSB_GAMEPAD_X,
+    "Y_MENU": vg.XUSB_BUTTON.XUSB_GAMEPAD_Y,
+    "LB_L1": vg.XUSB_BUTTON.XUSB_GAMEPAD_LEFT_SHOULDER,
+    "RB_R1": vg.XUSB_BUTTON.XUSB_GAMEPAD_RIGHT_SHOULDER,
+    "L3_CLICK": vg.XUSB_BUTTON.XUSB_GAMEPAD_LEFT_THUMB,
+    "R3_CLICK": vg.XUSB_BUTTON.XUSB_GAMEPAD_RIGHT_THUMB,
+    "SELECT": vg.XUSB_BUTTON.XUSB_GAMEPAD_BACK,
+    "START": vg.XUSB_BUTTON.XUSB_GAMEPAD_START,
+    "DPAD_CIMA": vg.XUSB_BUTTON.XUSB_GAMEPAD_DPAD_UP,
+    "DPAD_BAIXO": vg.XUSB_BUTTON.XUSB_GAMEPAD_DPAD_DOWN,
+    "DPAD_ESQUERDA": vg.XUSB_BUTTON.XUSB_GAMEPAD_DPAD_LEFT,
+    "DPAD_DIREITA": vg.XUSB_BUTTON.XUSB_GAMEPAD_DPAD_RIGHT,
+}
+
+sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+sock.bind((IP_RECEPTOR, PORTA))
+
+def limpar_buffer():
+    """Descarta mensagens UDP antigas que ainda estão aguardando no buffer do socket.
+
+    Durante a calibração, o usuário pode apertar comandos enquanto responde ao texto na tela.
+    Essas mensagens antigas não devem ser processadas por engano na etapa seguinte.
+    """
+    sock.setblocking(False)
+    try:
+        while True:
+            sock.recvfrom(1024)
+    except:
+        pass
+    sock.setblocking(True)
+
+def calibrar():
+    print("\n=== MODO DE CALIBRAÇÃO (COM LIMPEZA DE BUFFER) ===")
+    mapeamento = {"botoes": {}, "eixos": {}, "dpad": {}}
+    
+    botoes_para_calibrar = [
+        ("A_PULO", "Botão A (Inferior)"), ("B_VOLTAR", "Botão B (Direita)"),
+        ("X_ACAO", "Botão X (Esquerda)"), ("Y_MENU", "Botão Y (Superior)"),
+        ("LB_L1", "L1/LB"), ("RB_R1", "R1/RB"),
+        ("L3_CLICK", "Clique Analógico Esquerdo"), ("R3_CLICK", "Clique Analógico Direito"),
+        ("SELECT", "SELECT"), ("START", "START")
+    ]
+    
+    eixos_para_calibrar = [
+        ("ESQUERDO_HORIZONTAL", "Analógico ESQUERDO para os LADOS"),
+        ("ESQUERDO_VERTICAL", "Analógico ESQUERDO para CIMA/BAIXO"),
+        ("DIREITO_HORIZONTAL", "Analógico DIREITO para os LADOS"),
+        ("DIREITO_VERTICAL", "Analógico DIREITO para CIMA/BAIXO"),
+        ("L2_GATILHO", "Gatilho Esquerdo (L2)"), ("R2_GATILHO", "Gatilho Direito (R2)")
+    ]
+
+    def confirmar_captura(id_detectado, comando_nome):
+        print(f"\n[!] Detectado ID: {id_detectado} para {comando_nome}")
+        conf = input("    Pressione ENTER para aceitar ou 'r' para repetir: ").lower()
+        limpar_buffer()  # Descarrega eventos antigos que podem ter sido gerados enquanto o usuário interagia.
+        return conf == ""
+
+    # Calibração de botões principais.
+    # Cada pacote enviado pelo Android contém um identificador de botão e um valor binário.
+    # O receptor registra apenas o ID do evento correspondente ao pressionamento desejado.
+    for chave, desc in botoes_para_calibrar:
+        confirmado_final = False
+        limpar_buffer()
+        while not confirmado_final:
+            print(f"\r>> AGUARDANDO: {desc}         ", end="")
+            data, _ = sock.recvfrom(1024)
+            msg = data.decode()
+            if "Botao" in msg:
+                id_bruto, valor = msg.split(":")
+                if valor == "1":
+                    if confirmar_captura(id_bruto, desc):
+                        mapeamento["botoes"][id_bruto] = chave
+                        confirmado_final = True
+
+    # Calibração de eixos analógicos e gatilhos.
+    # O Android transmite valores contínuos para esses componentes, então usamos um limiar
+    # para confirmar que o movimento foi intencional e não apenas ruído do hardware.
+    for chave, desc in eixos_para_calibrar:
+        confirmado_final = False
+        limpar_buffer()
+        while not confirmado_final:
+            print(f"\r>> AGUARDANDO: {desc}         ", end="")
+            data, _ = sock.recvfrom(1024)
+            msg = data.decode()
+            if "Eixo" in msg:
+                id_bruto, valor = msg.split(":")
+                # Aumentamos para 0.9 para garantir que você realmente moveu o controle
+                if abs(float(valor)) > 0.9:
+                    if confirmar_captura(id_bruto, desc):
+                        mapeamento["eixos"][id_bruto] = chave
+                        confirmado_final = True
+
+    # Calibração da cruzeta (D-Pad) em quatro direções.
+    # Diferentes controles podem enviar o D-Pad como botão, eixo ou hat, então aceitamos todos esses formatos.
+    print("\n=== CALIBRANDO D-PAD (DIRECIONAIS) ===")
+    dpad_direcoes = [
+        ("DPAD_CIMA", "D-Pad para CIMA"),
+        ("DPAD_BAIXO", "D-Pad para BAIXO"),
+        ("DPAD_ESQUERDA", "D-Pad para ESQUERDA"),
+        ("DPAD_DIREITA", "D-Pad para DIREITA")
+    ]
+
+    for chave, desc in dpad_direcoes:
+        confirmado_final = False
+        limpar_buffer()
+        while not confirmado_final:
+            print(f"\r>> AGUARDANDO: {desc}         ", end="")
+            data, _ = sock.recvfrom(1024)
+            msg = data.decode()
+            
+            # Aceita qualquer formato de evento compatível: botão, eixo ou hat.
+            # Isso permite funcionar com controles que não seguem o mesmo esquema de nomes.
+            if ":" in msg:
+                id_bruto, valor = msg.split(":")
+                try:
+                    val_num = float(valor)
+                    # Detecta pressionamento efetivo do D-Pad.
+                    # Para botões digitais o valor é 1; para eixos analógicos usamos um threshold de 0.7.
+                    if abs(val_num) > 0.7:
+                        if confirmar_captura(id_bruto, desc):
+                            mapeamento["dpad"][id_bruto] = chave
+                            confirmado_final = True
+                except: pass
+
+    with open(ARQUIVO_CONFIG, 'w') as f:
+        json.dump(mapeamento, f)
+    return mapeamento
+
+def carregar_config():
+    if os.path.exists(ARQUIVO_CONFIG):
+        with open(ARQUIVO_CONFIG, 'r') as f:
+            return json.load(f)
+    return None
+
+# Fluxo principal de inicialização do receptor.
+# Primeiro tentamos carregar o mapeamento de eventos de calibração existente.
+# Se não existir ou se o usuário pedir, parte-se para a calibração interativa.
+mapa = carregar_config()
+if not mapa or input("Deseja recalibrar tudo? (s/n): ").lower() == 's':
+    mapa = calibrar()
+
+print("\n=== RECEPTOR RODANDO ===")
+
+last_lx, last_ly = 0, 0
+last_rx, last_ry = 0, 0
 
 try:
     while True:
-        # checa atalho uma vez por ciclo em vez de cada recv
-        if keyboard.is_pressed(COMBINACAO_SAIDA):
-            print(f"\n🛑 Atalho [{COMBINACAO_SAIDA}] detectado. Encerrando...")
-            break
+        data, addr = sock.recvfrom(1024)
+        msg = data.decode()
+        chave, valor = msg.split(":")
 
-        # processa todas as mensagens que chegaram
-        while not msg_queue.empty():
-            raw = msg_queue.get()
-            try:
-                mensagem = raw.decode('utf-8')
-                if ':' in mensagem:
-                    tipo, valor = mensagem.split(':')
-                    if tipo in estado_controle:
-                        estado_controle[tipo] = float(valor)
-            except (UnicodeDecodeError, ValueError):
-                # ignora pacotes malformados sem quebrar o loop
-                continue
+        nome = chave
+        if chave in mapa["botoes"]: 
+            nome = mapa["botoes"][chave]
+        elif chave in mapa["eixos"]: 
+            nome = mapa["eixos"][chave]
+        elif chave in mapa["dpad"]: 
+            nome = mapa["dpad"][chave]
 
-        # 4. ATUALIZAÇÃO DOS ANALÓGICOS E GATILHOS -------------------------------
-        gamepad.left_joystick_float(x_value_float=estado_controle["AX"],
-                                   y_value_float=-estado_controle["AY"])
-        gamepad.right_joystick_float(x_value_float=estado_controle["RX"],
-                                    y_value_float=-estado_controle["RY"])
-        gamepad.left_trigger_float(value_float=estado_controle["LT"])
-        gamepad.right_trigger_float(value_float=estado_controle["RT"])
-
-        # 5. ATUALIZAÇÃO DOS BOTÕES SIMPLES -------------------------------------
-        for chave, botao_virtual in mapeamento_botoes.items():
-            if estado_controle[chave] == 1:
-                gamepad.press_button(button=botao_virtual)
+        # Converte o evento recebido em um comando de gamepad virtual.
+        # O mapeamento de calibração transforma IDs de hardware em nomes lógicos de controle.
+        
+        # Se o evento for um botão ou uma direção de D-Pad já calibrada
+        if nome in MAPA_VIRTUAL:
+            if valor == "1":
+                gamepad.press_button(button=MAPA_VIRTUAL[nome])
             else:
-                gamepad.release_button(button=botao_virtual)
+                gamepad.release_button(button=MAPA_VIRTUAL[nome])
 
-        # 6. ATUALIZAÇÃO DO D-PAD ------------------------------------------------
-        # vertical
-        if estado_controle["DPAD_Y"] == 1:
-            gamepad.press_button(vg.XUSB_BUTTON.XUSB_GAMEPAD_DPAD_UP)
-            gamepad.release_button(vg.XUSB_BUTTON.XUSB_GAMEPAD_DPAD_DOWN)
-        elif estado_controle["DPAD_Y"] == -1:
-            gamepad.press_button(vg.XUSB_BUTTON.XUSB_GAMEPAD_DPAD_DOWN)
-            gamepad.release_button(vg.XUSB_BUTTON.XUSB_GAMEPAD_DPAD_UP)
-        else:
-            gamepad.release_button(vg.XUSB_BUTTON.XUSB_GAMEPAD_DPAD_UP)
-            gamepad.release_button(vg.XUSB_BUTTON.XUSB_GAMEPAD_DPAD_DOWN)
-        # horizontal
-        if estado_controle["DPAD_X"] == 1:
-            gamepad.press_button(vg.XUSB_BUTTON.XUSB_GAMEPAD_DPAD_RIGHT)
-            gamepad.release_button(vg.XUSB_BUTTON.XUSB_GAMEPAD_DPAD_LEFT)
-        elif estado_controle["DPAD_X"] == -1:
-            gamepad.press_button(vg.XUSB_BUTTON.XUSB_GAMEPAD_DPAD_LEFT)
-            gamepad.release_button(vg.XUSB_BUTTON.XUSB_GAMEPAD_DPAD_RIGHT)
-        else:
-            gamepad.release_button(vg.XUSB_BUTTON.XUSB_GAMEPAD_DPAD_RIGHT)
-            gamepad.release_button(vg.XUSB_BUTTON.XUSB_GAMEPAD_DPAD_LEFT)
+        # Se o evento for um eixo analógico, converte o valor flutuante em escala de 16 bits.
+        elif "HORIZONTAL" in nome or "VERTICAL" in nome:
+            v_calc = int(float(valor) * 32767)
+            
+            # Analógico Esquerdo
+            if nome == "ESQUERDO_HORIZONTAL":
+                last_lx = v_calc
+                gamepad.left_joystick(x_value=last_lx, y_value=last_ly)
+            elif nome == "ESQUERDO_VERTICAL":
+                last_ly = -v_calc  # Inverte a direção vertical porque a API XUSB espera o eixo Y positivo para cima.
+                gamepad.left_joystick(x_value=last_lx, y_value=last_ly)
+            
+            # Analógico Direito
+            elif nome == "DIREITO_HORIZONTAL":
+                last_rx = v_calc
+                gamepad.right_joystick(x_value=last_rx, y_value=last_ry)
+            elif nome == "DIREITO_VERTICAL":
+                last_ry = -v_calc  # Inverte a direção vertical para compatibilidade com a emulação do Windows.
+                gamepad.right_joystick(x_value=last_rx, y_value=last_ry)
+        
+        # Se o evento for um gatilho, converte o valor contínuo para a escala de 0-255 exigida pelo vgamepad.
+        elif "GATILHO" in nome:
+            v_trig = int(float(valor) * 255)
+            if "L2" in nome: gamepad.left_trigger(value=max(0, v_trig))
+            elif "R2" in nome: gamepad.right_trigger(value=max(0, v_trig))
 
-        # 7. SINCRONIZAÇÃO -------------------------------------------------------
+        # Envia a atualização completa do controle para o Windows
         gamepad.update()
 
-        # atalho de segurança: Select + Start ordem não importa
-        if estado_controle["BTN_SELECT"] == 1 and estado_controle["BTN_START"] == 1:
-            print("\n🛑 Combo no controle recebido. Encerrando...")
-            break
-
-        # pequena pausa para evitar 100% de CPU (cerca de 5 ms)
-        time.sleep(0.005)
+        print(f"\rComando: {nome} | Valor: {valor}                ", end="")
 
 except KeyboardInterrupt:
-    print("\nEncerrado manualmente (Ctrl+C).")
+    print("\nEncerrando...")
 finally:
-    # limpa estado do gamepad virtual antes de sair
-    gamepad.reset()
-    gamepad.update()
     sock.close()
-    print("✨ Recursos liberados.")
-    sys.exit()
+    

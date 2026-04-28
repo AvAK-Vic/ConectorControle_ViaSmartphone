@@ -1,119 +1,113 @@
-# 🎮 Conector de Controle via Smartphone
+# Conector de Controle Android para PC via Wi-Fi
 
-## 📋 Visão Geral
+Este projeto transforma um controle físico ou joystick conectado ao Android em um gamepad virtual para Windows.
+Ele usa UDP para transmitir eventos do Android ao PC e `vgamepad` para emular um Xbox 360 virtual no Windows.
 
-**ConectorControle_ViaSmartphone** é um projeto pessoal criado como experimento e aprendizado prático. Ele transforma seu smartphone Android em uma ponte de comunicação de alto desempenho para gamepads.
+## ✅ Vantagens
 
-O celular recebe os sinais de um controle Bluetooth (Ipega, DualShock, Xbox etc.) e transmite os comandos via rede local (Wi‑Fi) para o PC, onde são convertidos em um controle virtual XInput.
+- Emulação nativa de Xbox 360 para compatibilidade ampla com jogos Windows.
+- Transmissão UDP leve e de baixa latência.
+- Mapeamento e calibração dinâmicos de botões, eixos e D-Pad.
+- Evita repetição de comandos ao enviar apenas mudanças de estado.
+- Suporta joystick Bluetooth ou USB detectado pelo `pygame` no Android.
+- Não exige instalação de drivers extras no Android além do Pydroid 3.
+- O mapeamento é gravado em `config_controle.json` para reutilização.
 
-Ideal para situações em que o computador não possui suporte Bluetooth nativo, ou quando se deseja estender o alcance do controle usando a rede de dados.
+## 🎯 Para quem foi feito
 
-> ⚠️ **Aviso**: este projeto foi desenvolvido por um iniciante com auxílio de inteligência artificial. Pode apresentar bugs e não é uma solução comercial. Se o seu controle tiver um cabo USB, conectá‑lo diretamente ao PC é muito mais simples.
+- Usuários que desejam usar um joystick Android como controle de jogos no Windows.
+- Pessoas com um controle Bluetooth/USB conectado ao Android e que não querem usar soluções de hardware adicionais.
+- Projetos de prototipagem que precisam de uma interface de controle remota baseada em Python.
 
----
+> Nota: o lado Android só está escrito para execução em Pydroid 3 e depende do `pygame` para ler entradas de joystick.
 
-## 🎯 Como Funciona
+## 🔧 Como funciona
 
-O sistema é dividido em duas partes que se comunicam via UDP para reduzir latência:
+### Arquitetura
 
-- **Transmissor (Android):** roda no Pydroid 3. Lê eixos, botões e D‑Pad do controle físico e envia pacotes somente quando há mudança de estado.
-- **Receptor (Windows):** recebe os pacotes em uma thread separada, processa os valores e injeta os comandos no Windows como um controle XInput virtual.
+1. **`Phone/controle.py`**
+   - Detecta o dispositivo de entrada no Android através do `pygame`.
+   - Lê eixos, botões e o D-Pad.
+   - Envia pacotes UDP para o PC com o formato `Chave:Valor`.
 
----
+2. **`Pc/receptor.py`**
+   - Escuta pacotes UDP na porta `5005`.
+   - Realiza calibração dos IDs de botões, eixos e D-Pad.
+   - Converte esses dados em comandos do gamepad virtual usando `vgamepad`.
 
-## 🗂️ Estrutura do Repositório
+## 🛠️ Requisitos
 
-```
-ConectorControle_ViaSmartphone/
-├── README.md                  # documentação
-├── Phone/
-│   ├── controle.py            # transmissor (asyncio)
-│   ├── calibrador.py          # visualizador/diagnóstico no Android
-│   └── diagnostico.py         # script para verificar reconhecimento do joystick
-└── Pc/
-    └── receptor.py            # receptor multithread para Windows
-```
+### No PC
 
----
+- Python 3.x.
+- Biblioteca `vgamepad`: `pip install vgamepad`.
+- Windows com suporte a dispositivos de gamepad virtuais.
+- Porta UDP `5005` livre.
+- Permissão para criar/ler `config_controle.json` na pasta do projeto.
 
-## 🔧 Requisitos e Instalação
+### No Android
 
-### No Computador (Windows)
-1. Instale Python 3.8+.
-2. Instale dependências:
-   ```bash
-   pip install vgamepad keyboard psutil
-   ```
+- Pydroid 3 instalado.
+- `pygame` instalado no Pydroid: `pip install pygame`.
+- Um joystick ou controle conectado ao Android via USB/OTG ou Bluetooth.
+- Mesmo Wi-Fi entre Android e PC.
 
-### No Smartphone (Android)
-1. Instale o aplicativo **Pydroid 3** pela Play Store.
-2. Dentro do Pydroid, abra o terminal e execute:
-   ```bash
-   pip install pygame
-   ```
+## ⚠️ Limitações
 
----
+- A emulação `vgamepad` funciona apenas no Windows.
+- Dependendo do controle e do Android, nem todos os dispositivos são reconhecidos corretamente pelo `pygame`.
+- O protocolo usa UDP sem confirmação, então pacotes podem ser perdidos.
+- O projeto suporta basicamente um dispositivo de controle por vez.
+- A calibração é manual e pode precisar ser refeita ao trocar o controle.
+- Não há criptografia ou autenticação na comunicação.
 
-## 🚀 Guia de Uso Rápido
+## 🚀 Como usar
 
-1. **Inicie o receptor no PC**
-   ```bash
-   python Pc/receptor.py
-   ```
-   Ele inicia escutando na porta UDP 5005.
-   - Atalho de saída: `CTRL+Q` no teclado ou `SELECT+START` no controle.
+### 1. Preparar o PC
 
-2. **Configure o transmissor no celular**
-   - Abra `Phone/controle.py` no Pydroid e edite a variável `IP_DO_PC` com o IPv4 do seu computador.
-     ```python
-     IP_DO_PC = "192.168.0.100"  # substitua pelo IP do PC
-     ```
-   - Execute: `python Phone/controle.py`.
+1. Abra um terminal na pasta `Pc`.
+2. Instale `vgamepad`: `pip install vgamepad`.
+3. Execute `python receptor.py`.
+4. Se o arquivo `config_controle.json` não existir ou se desejar recalibrar, responda `s` à pergunta.
 
-3. **Calibre o controle**
-   - Se os IDs dos botões parecerem errados, execute `Phone/calibrador.py` para ver os valores e ajuste o mapeamento em `controle.py`.
-   - Caso o transmissor não reconheça o controle, rode `Phone/diagnostico.py` para diagnosticar o joystick.
+### 2. Preparar o Android
 
----
+1. Abra `Phone/controle.py` no Pydroid 3.
+2. Altere `IP_DO_PC` para o IP local do PC.
+3. Execute o script.
 
-## ⚙️ Arquitetura e Otimizações
+### 3. Jogar
 
-- **Threaded listener:** o receptor utiliza uma thread dedicada para leitura de rede, evitando atraso no processamento.
-- **Envio diferencial:** o transmissor só envia pacotes quando os valores mudam, economizando bateria e banda.
-- **Filtro de acelerômetro:** entradas de sensoreamento de inclinação são ignoradas.
-- **D‑Pad integrado:** botões físicos são convertidos em eixos do D‑Pad virtual.
+- Com o receptor ativo, o Android enviará eventos para o PC.
+- O Windows receberá o dispositivo como um controle Xbox 360 virtual.
+- Teste em seu jogo favorito.
 
----
+## 📘 Observações técnicas
 
-## 🎮 Mapeamento Padrão
+- `Phone/controle.py` usa `pygame.event.pump()` para manter o loop ativo e evitar que o processo seja interrompido.
+- O código do Android faz debounce em valores menores que `0.05` e preserva a tela ativa para evitar suspensão.
+- `Pc/receptor.py` mantém o último valor dos eixos e atualiza apenas quando necessário.
+- O arquivo `config_controle.json` armazena o mapeamento entre IDs de eventos do joystick Android e nomes lógicos de botões.
 
-| Input     | Função no PC          |
-|-----------|------------------------|
-| AX / AY   | Analógico esquerdo     |
-| RX / RY   | Analógico direito      |
-| LT / RT   | Gatilhos progressivos  |
-| BTN_A/B/X/Y | Botões de ação       |
-| DPAD_X/Y  | Direcional (cruz)      |
-| SELECT/START | Menu e opções       |
+## 📌 Requisito no código
 
+O `Pc/receptor.py` agora verifica automaticamente:
 
----
+- se o pacote Python `vgamepad` está instalado;
+- se `config_controle.json` existe ou precisa ser criado;
+- se a porta UDP `5005` está disponível.
 
-## 📝 Licença e Disclaimer
+Essa validação é feita antes da criação do socket principal, evitando erros de ambiente durante a execução.
 
-Projeto experimental fornecido "como está". Use por sua conta e risco. Pode conter bugs; melhorias são bem-vindas.
+## 📂 Estrutura do projeto
 
----
+- `Pc/receptor.py` — receptor UDP e emulador de gamepad.
+- `Phone/controle.py` — emissor UDP no Android.
+- `config_controle.json` — mapeamento gerado pela calibração.
+- `README.md` — documentação do projeto.
 
-## 👤 Sobre Este Projeto
+## 💡 Dicas
 
-- Desenvolvido sozinho por um iniciante em Python e redes.
-- Inteligência artificial foi usada para gerar partes do código e documentação.
-- Objetivo: aprender sobre comunicação de redes, emulação de entrada e desenvolvimento em Python.
-- Alternativa recomendada: use cabo USB sempre que possível.
-
----
-
-## 📧 Contribuições
-
-Sugestões e correções são bem-vindas! Abra uma issue ou envie um pull request.
+- Use uma rede Wi-Fi estável para reduzir perda de pacotes.
+- Verifique o IP do PC com `ipconfig` e atualize `IP_DO_PC` no Android.
+- Se o controle não aparecer no Windows, reinicie o receptor e refaça a calibração.
