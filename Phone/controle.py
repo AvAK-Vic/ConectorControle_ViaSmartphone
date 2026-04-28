@@ -3,7 +3,7 @@ import socket
 import os
 
 # Configuração do protocolo de transporte UDP
-IP_DO_PC = "192.168.18.21" 
+IP_DO_PC = "xxx.xxx.xx.xx" 
 PORTA = 5005
 sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
 
